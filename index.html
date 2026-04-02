@@ -634,5 +634,15 @@
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
+    <script>
+  // تسجيل الـ Service Worker لكي يظهر زر "تثبيت التطبيق"
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then((reg) => console.log('تم تسجيل التطبيق بنجاح', reg.scope))
+        .catch((err) => console.log('فشل التسجيل', err));
+    });
+  }
+</script>
 </body>
 </html>
