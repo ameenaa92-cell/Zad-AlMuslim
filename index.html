@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>زاد المُسلم</title>
     
-    <!-- إعدادات أيقونة التطبيق عند إضافته للشاشة الرئيسية -->
+    <!-- إعدادات أيقونة التطبيق -->
     <link rel="icon" type="image/png" href="icon.png">
     <link rel="apple-touch-icon" href="icon.png">
     <link rel="manifest" href="manifest.json">
@@ -15,7 +15,7 @@
     <meta name="theme-color" content="#0F1F3D">
     
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -38,6 +38,7 @@
             --teal-light: #3AA68F;
             --cream: #FAF6EE;
             --cream-dark: #F0E8D5;
+            --paper: #FDFBF7;
         }
 
         * { box-sizing: border-box; }
@@ -50,6 +51,11 @@
             touch-action: pan-y;
         }
         
+        .quran-text {
+            font-family: 'Amiri Quran', serif;
+            line-height: 2.3;
+        }
+
         .custom-scroll {
             -webkit-overflow-scrolling: touch;
             overscroll-behavior-y: contain;
@@ -103,6 +109,8 @@
         @keyframes flicker { from { transform: scale(1) rotate(-3deg); } to { transform: scale(1.1) rotate(3deg); } }
 
         .next-prayer-card { background: linear-gradient(135deg, var(--navy-mid), var(--navy)); border-color: var(--gold-dark); }
+        
+        .smart-reminder { background: linear-gradient(135deg, var(--teal), var(--teal-light)); border-color: rgba(255,255,255,0.2); animation: fadeIn 0.5s ease-out; }
     </style>
 </head>
 <body class="m-0 p-0 overflow-hidden" style="background: var(--cream);">
@@ -110,6 +118,7 @@
     <div id="root" class="w-full h-[100dvh]"></div>
 
     <script type="text/babel">
+        // إعدادات Firebase
         const firebaseConfig = {
             apiKey: "AIzaSyBz3lyOoJYK37RkPwYWjMRDXnCkds9Zyx4",
             authDomain: "zadapp-3e272.firebaseapp.com",
@@ -124,15 +133,94 @@
         const db = firebase.firestore();
         const googleProvider = new firebase.auth.GoogleAuthProvider();
 
+        // ----------------------------------------------------
+        // نظام IndexedDB لتخزين المصحف أوفلاين (الميزة الجديدة)
+        // ----------------------------------------------------
+        const DB_NAME = "ZadQuranDB";
+        const STORE_NAME = "Pages";
+
+        const openOfflineDB = () => {
+            return new Promise((resolve, reject) => {
+                const request = window.indexedDB.open(DB_NAME, 1);
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => resolve(request.result);
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME);
+                    }
+                };
+            });
+        };
+
+        const saveQuranToOfflineDB = async (pagesObject) => {
+            const db = await openOfflineDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, "readwrite");
+                const store = tx.objectStore(STORE_NAME);
+                for (const pageNum in pagesObject) {
+                    store.put(pagesObject[pageNum], parseInt(pageNum));
+                }
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        };
+
+        const getPageFromOfflineDB = async (pageNum) => {
+            const db = await openOfflineDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(STORE_NAME, "readonly");
+                const store = tx.objectStore(STORE_NAME);
+                const request = store.get(pageNum);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        };
+
+        const checkQuranExistsOffline = async () => {
+            const db = await openOfflineDB();
+            return new Promise((resolve) => {
+                const tx = db.transaction(STORE_NAME, "readonly");
+                const store = tx.objectStore(STORE_NAME);
+                const request = store.count();
+                request.onsuccess = () => resolve(request.result >= 604);
+                request.onerror = () => resolve(false);
+            });
+        };
+
+        const deleteOfflineQuran = async () => {
+            const db = await openOfflineDB();
+            return new Promise((resolve) => {
+                const tx = db.transaction(STORE_NAME, "readwrite");
+                const store = tx.objectStore(STORE_NAME);
+                const request = store.clear();
+                request.onsuccess = () => resolve();
+                request.onerror = () => resolve();
+            });
+        };
+        // ----------------------------------------------------
+
         const { useState, useEffect, useMemo, useCallback } = React;
 
         const CITIES = [
-            { value: 'Mosul', label: 'الموصل', country: 'Iraq' },
             { value: 'Baghdad', label: 'بغداد', country: 'Iraq' },
+            { value: 'Mosul', label: 'الموصل (نينوى)', country: 'Iraq' },
             { value: 'Basrah', label: 'البصرة', country: 'Iraq' },
             { value: 'Erbil', label: 'أربيل', country: 'Iraq' },
-            { value: 'Najaf', label: 'النجف', country: 'Iraq' },
-            { value: 'Karbala', label: 'كربلاء', country: 'Iraq' },
+            { value: 'Najaf', label: 'النجف الأشرف', country: 'Iraq' },
+            { value: 'Karbala', label: 'كربلاء المقدسة', country: 'Iraq' },
+            { value: 'Kirkuk', label: 'كركوك', country: 'Iraq' },
+            { value: 'Sulaymaniyah', label: 'السليمانية', country: 'Iraq' },
+            { value: 'Duhok', label: 'دهوك', country: 'Iraq' },
+            { value: 'Ramadi', label: 'الرمادي (الأنبار)', country: 'Iraq' },
+            { value: 'Tikrit', label: 'تكريت (صلاح الدين)', country: 'Iraq' },
+            { value: 'Baqubah', label: 'بعقوبة (ديالى)', country: 'Iraq' },
+            { value: 'Hillah', label: 'الحلة (بابل)', country: 'Iraq' },
+            { value: 'Kut', label: 'الكوت (واسط)', country: 'Iraq' },
+            { value: 'Amarah', label: 'العمارة (ميسان)', country: 'Iraq' },
+            { value: 'Nasiriyah', label: 'الناصرية (ذي قار)', country: 'Iraq' },
+            { value: 'Samawah', label: 'السماوة (المثنى)', country: 'Iraq' },
+            { value: 'Diwaniyah', label: 'الديوانية (القادسية)', country: 'Iraq' },
             { value: 'Mecca', label: 'مكة المكرمة', country: 'Saudi Arabia' }
         ];
 
@@ -172,8 +260,11 @@
             { k: 'sun_witr', n: 'الوتر', icon: '🌙', type: 'نافلة' },
             { k: 'sun_duha', n: 'صلاة الضحى', icon: '🌞', type: 'نافلة' },
             { k: 'sun_tahajjud', n: 'قيام الليل', icon: '🌟', type: 'نافلة' },
-            { k: 'sun_sadaqa', n: 'الصدقة', icon: '💛', type: 'يومية' }
+            { k: 'sun_sadaqa', n: 'الصدقة', icon: '💛', type: 'يومية' },
+            { k: 'sun_fasting', n: 'صيام تطوع (بيض/إثنين/خميس)', icon: '🤍', type: 'يومية' }
         ];
+
+        const SURAH_START_PAGES = [1, 2, 50, 77, 106, 128, 151, 177, 187, 208, 221, 235, 249, 255, 262, 267, 282, 293, 305, 312, 322, 332, 342, 350, 359, 367, 377, 385, 396, 404, 411, 415, 418, 428, 434, 440, 446, 453, 458, 467, 477, 483, 489, 496, 499, 502, 507, 511, 515, 518, 520, 523, 526, 528, 531, 534, 537, 542, 545, 549, 551, 553, 554, 556, 558, 560, 562, 564, 566, 568, 570, 572, 574, 575, 577, 578, 580, 582, 583, 585, 586, 587, 587, 589, 590, 591, 591, 592, 593, 594, 595, 595, 596, 596, 597, 597, 598, 598, 599, 599, 600, 600, 601, 601, 601, 602, 602, 602, 603, 603, 603, 604, 604, 604];
 
         function App() {
             const [user, setUser] = useState(null);
@@ -186,10 +277,11 @@
             const [history, setHistory] = useState([]);
             const [sunnahHabits, setSunnahHabits] = useState({});
             
-            // متغير لتحديد اليوم المفتوح للتعديل في الماضي
+            const [quranBookmark, setQuranBookmark] = useState(1);
+
             const [editingDate, setEditingDate] = useState(null);
 
-            const [city, setCity] = useState(localStorage.getItem('m_city') || 'Mosul');
+            const [city, setCity] = useState(localStorage.getItem('m_city') || 'Baghdad');
             const [calcMethod, setCalcMethod] = useState(parseInt(localStorage.getItem('m_calc_method') || 4));
             const [prayerOffsets, setPrayerOffsets] = useState({ Fajr: 0, Dhuhr: 0, Asr: 0, Maghrib: 0, Isha: 0 });
             
@@ -202,12 +294,202 @@
             const [currentTime, setCurrentTime] = useState(new Date());
             const [tasbeehCount, setTasbeehCount] = useState(0);
 
+            const [emailInput, setEmailInput] = useState('');
+            const [passInput, setPassInput] = useState('');
+            const [isSignUpMode, setIsSignUpMode] = useState(false);
+
+            // حالات المصحف الشريف والتنزيل
+            const [surahsList, setSurahsList] = useState(JSON.parse(localStorage.getItem('quran_surahs')) || []);
+            const [readingPage, setReadingPage] = useState(null);
+            const [pageData, setPageData] = useState(null);
+            const [quranLoading, setQuranLoading] = useState(false);
+            const [quranFontSize, setQuranFontSize] = useState(26);
+            
+            const [quranSearchQuery, setQuranSearchQuery] = useState('');
+            const [jumpPageInput, setJumpPageInput] = useState('');
+            const [touchStartPos, setTouchStartPos] = useState({ x: 0, y: 0 });
+
+            // حالات التنزيل بدون إنترنت (Offline Download States)
+            const [isQuranDownloaded, setIsQuranDownloaded] = useState(false);
+            const [isDownloadingQuran, setIsDownloadingQuran] = useState(false);
+            const [downloadProgress, setDownloadProgress] = useState(0);
+
             const todayKey = new Date().toLocaleDateString('en-CA');
             const hijriDate = new Intl.DateTimeFormat('ar-SA-u-ca-islamic', {day:'numeric', month:'long', year:'numeric'}).format(currentTime);
             const gregorianDate = new Intl.DateTimeFormat('ar-EG', {weekday: 'long', day: 'numeric', month: 'long'}).format(currentTime);
 
             const dayOfYear = Math.floor((currentTime - new Date(currentTime.getFullYear(), 0, 0)) / 1000 / 60 / 60 / 24);
             const todayHadith = DAILY_HADITHS[dayOfYear % DAILY_HADITHS.length];
+
+            const getUserRank = useMemo(() => {
+                if (streak >= 40) return { title: 'صاحب يقين', icon: '👑', color: '#C9A84C' };
+                if (streak >= 21) return { title: 'همة عالية', icon: '🌟', color: '#3AA68F' };
+                if (streak >= 8) return { title: 'مثابر', icon: '💪', color: '#2A7F6F' };
+                if (streak >= 3) return { title: 'مواظب', icon: '✨', color: '#8B6914' };
+                return { title: 'في بداية الطريق', icon: '🌱', color: 'rgba(255,255,255,0.7)' };
+            }, [streak]);
+
+            const smartReminder = useMemo(() => {
+                const dayOfWeek = currentTime.getDay(); 
+                const hDayStr = new Intl.DateTimeFormat('ar-SA-u-ca-islamic', {day:'numeric'}).formatToParts(currentTime).find(p => p.type === 'day')?.value;
+                const hDayNum = parseInt(hDayStr) || 0;
+                const isWhiteDay = hDayNum >= 13 && hDayNum <= 15;
+
+                if (dayOfWeek === 5) return { title: 'سنن الجمعة ✨', desc: 'لا تنسَ قراءة سورة الكهف، وكثرة الصلاة على النبي ﷺ، وتحري ساعة الاستجابة.', icon: '🕌' };
+                if (dayOfWeek === 4 || dayOfWeek === 0) return { title: 'تذكير بصيام غدٍ 🌙', desc: 'تُرفع الأعمال يومي الإثنين والخميس، هل نويت صيام الغد احتساباً للأجر؟', icon: '🤍' };
+                if (isWhiteDay) return { title: 'الأيام البيض ⚪', desc: `اليوم ${hDayNum} هجري. صيام ثلاثة أيام من كل شهر كصيام الدهر كله!`, icon: '🌟' };
+                return null;
+            }, [currentTime]);
+
+            // التحقق مما إذا كان المصحف محملاً، وجلب الفهرس
+            useEffect(() => {
+                checkQuranExistsOffline().then(exists => setIsQuranDownloaded(exists));
+
+                if(navigator.onLine) {
+                    fetch('https://api.alquran.cloud/v1/surah')
+                        .then(res => res.json())
+                        .then(data => { 
+                            if(data.data) {
+                                setSurahsList(data.data); 
+                                localStorage.setItem('quran_surahs', JSON.stringify(data.data));
+                            }
+                        })
+                        .catch(err => console.log("خطأ", err));
+                }
+            }, []);
+
+            // عملية تنزيل المصحف بالكامل للعمل أوفلاين
+            const handleDownloadQuran = async () => {
+                if (!navigator.onLine) {
+                    alert("يرجى الاتصال بالإنترنت أولاً لتنزيل المصحف.");
+                    return;
+                }
+                
+                setIsDownloadingQuran(true);
+                setDownloadProgress(0);
+                
+                // محاكاة شريط التقدم ليكون جذاباً للمستخدم
+                const progressInterval = setInterval(() => {
+                    setDownloadProgress(prev => {
+                        if (prev >= 90) return prev;
+                        return prev + Math.floor(Math.random() * 10) + 1;
+                    });
+                }, 300);
+
+                try {
+                    // جلب المصحف كاملاً (حوالي 2 ميجا)
+                    const res = await fetch('https://api.alquran.cloud/v1/quran/quran-uthmani');
+                    const data = await res.json();
+                    
+                    // إعادة ترتيب الآيات حسب الصفحات لتخزينها في القاعدة
+                    const pagesObj = {};
+                    data.data.surahs.forEach(surah => {
+                        surah.ayahs.forEach(ayah => {
+                            const p = ayah.page;
+                            if(!pagesObj[p]) pagesObj[p] = { ayahs: [] };
+                            pagesObj[p].ayahs.push({
+                                ...ayah,
+                                surah: { number: surah.number, name: surah.name, revelationType: surah.revelationType }
+                            });
+                        });
+                    });
+                    
+                    await saveQuranToOfflineDB(pagesObj);
+                    
+                    clearInterval(progressInterval);
+                    setDownloadProgress(100);
+                    
+                    setTimeout(() => {
+                        setIsQuranDownloaded(true);
+                        setIsDownloadingQuran(false);
+                        alert("تم تنزيل المصحف بنجاح! يمكنك الآن القراءة في أي وقت بدون إنترنت.");
+                    }, 500);
+
+                } catch (e) {
+                    console.error("فشل التنزيل", e);
+                    clearInterval(progressInterval);
+                    setIsDownloadingQuran(false);
+                    alert("حدث خطأ أثناء التنزيل. تحقق من الاتصال وحاول مرة أخرى.");
+                }
+            };
+
+            const handleDeleteDownloadedQuran = async () => {
+                if(window.confirm("هل أنت متأكد أنك تريد حذف المصحف من ذاكرة الهاتف؟ ستحتاج لإنترنت لقرائته لاحقاً.")){
+                    await deleteOfflineQuran();
+                    setIsQuranDownloaded(false);
+                    alert("تم حذف المصحف المحمل.");
+                }
+            };
+
+            // دالة فتح الصفحة (ذكية: تجلب من الهاتف إذا متوفر، أو من الإنترنت)
+            const openPage = async (pageNum) => {
+                if(pageNum < 1 || pageNum > 604) return;
+                setReadingPage(pageNum);
+                setPageData(null);
+                setQuranLoading(true);
+                window.scrollTo(0, 0);
+                
+                if (isQuranDownloaded) {
+                    try {
+                        const localData = await getPageFromOfflineDB(pageNum);
+                        if (localData) {
+                            setPageData(localData);
+                            setQuranLoading(false);
+                            return; // توقف هنا، لقد جلبنا البيانات من الهاتف بسرعة البرق
+                        }
+                    } catch (e) { console.error("خطأ في قراءة القاعدة المحلية", e); }
+                }
+                
+                // إذا لم يكن محملاً، اجلبه من الإنترنت
+                fetch(`https://api.alquran.cloud/v1/page/${pageNum}/quran-uthmani`)
+                    .then(res => res.json())
+                    .then(data => {
+                        setPageData(data.data);
+                        setQuranLoading(false);
+                    })
+                    .catch(err => {
+                        console.log(err);
+                        setQuranLoading(false);
+                        alert("لا يوجد اتصال بالإنترنت! يرجى تنزيل المصحف أولاً لتقرأ بدون إنترنت.");
+                    });
+            };
+
+            const saveBookmark = () => {
+                setQuranBookmark(readingPage);
+                alert(`تم حفظ العلامة عند الصفحة ${readingPage} بنجاح!`);
+            };
+
+            const handleJumpPage = () => {
+                const page = parseInt(jumpPageInput);
+                if (page >= 1 && page <= 604) {
+                    openPage(page);
+                    setJumpPageInput('');
+                } else {
+                    alert('الرجاء إدخال رقم صفحة صحيح بين 1 و 604');
+                }
+            };
+
+            const handleTouchStart = (e) => {
+                setTouchStartPos({ x: e.changedTouches[0].screenX, y: e.changedTouches[0].screenY });
+            };
+
+            const handleTouchEnd = (e) => {
+                if (!readingPage) return;
+                const endX = e.changedTouches[0].screenX;
+                const endY = e.changedTouches[0].screenY;
+                const diffX = touchStartPos.x - endX;
+                const diffY = touchStartPos.y - endY;
+
+                if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 60) {
+                    if (diffX > 0 && readingPage < 604) openPage(readingPage + 1);
+                    else if (diffX < 0 && readingPage > 1) openPage(readingPage - 1);
+                }
+            };
+
+            const filteredSurahs = useMemo(() => {
+                if (!quranSearchQuery) return surahsList;
+                return surahsList.filter(s => s.name.includes(quranSearchQuery));
+            }, [surahsList, quranSearchQuery]);
 
             useEffect(() => {
                 const timer = setInterval(() => setCurrentTime(new Date()), 60000);
@@ -265,11 +547,11 @@
                         setHistory(d.history || []); setSunnahHabits(d.sunnahHabits || {});
                         if(d.prayerOffsets) setPrayerOffsets(d.prayerOffsets);
                         if(d.calcMethod) setCalcMethod(d.calcMethod);
+                        if(d.quranBookmark) setQuranBookmark(d.quranBookmark);
                     }
                 } catch (e) { console.error(e); }
             };
 
-            // حساب الإنجاز لأي يوم محدد
             const calculateScore = (dateKey = todayKey, habitsData = habits) => {
                 const keys = ['f','d','a','m','i','q','az','sw','ist'];
                 const done = keys.filter(k => habitsData[dateKey + k]).length;
@@ -281,30 +563,27 @@
                 return Math.round((done / SUNNAH_LIST.length) * 100);
             };
 
-            // تزامن الإعدادات مع السحابة، وتحديث كافة التواريخ
             const syncToCloud = async () => {
                 if (!user) return;
                 setSyncStatus('saving');
                 try {
                     let updatedHistory = [...history];
                     
-                    // ضمان وجود إنجاز اليوم
                     if (!updatedHistory.find(h => h.date === todayKey)) {
                         updatedHistory.unshift({ date: todayKey, score: calculateScore(todayKey) });
                     }
 
-                    // تحديث وتقييم السجل بالكامل لضمان تحديث الأيام السابقة المعدلة
                     updatedHistory = updatedHistory.map(h => ({
                         ...h,
                         score: calculateScore(h.date, habits)
                     })).sort((a,b) => new Date(b.date) - new Date(a.date));
 
                     await db.collection('users').doc(user.uid).set({
-                        habits, sunnahHabits, vocab, quran, history: updatedHistory.slice(0, 60),
-                        prayerOffsets, calcMethod, lastUpdate: firebase.firestore.FieldValue.serverTimestamp()
+                        habits, sunnahHabits, vocab, quran, history: updatedHistory.slice(0, 100),
+                        prayerOffsets, calcMethod, quranBookmark, lastUpdate: firebase.firestore.FieldValue.serverTimestamp()
                     }, { merge: true });
                     
-                    setHistory(updatedHistory.slice(0, 60));
+                    setHistory(updatedHistory.slice(0, 100));
                     setSyncStatus('saved');
                 } catch (e) { setSyncStatus('error'); console.error(e); }
             };
@@ -313,12 +592,57 @@
                 if (!user) return;
                 const timer = setTimeout(syncToCloud, 1000);
                 return () => clearTimeout(timer);
-            }, [habits, sunnahHabits, vocab, quran, prayerOffsets, calcMethod]);
+            }, [habits, sunnahHabits, vocab, quran, prayerOffsets, calcMethod, quranBookmark]);
 
-            // دعم تعديل أي يوم عبر دالة التفعيل (Toggle)
+            const handleEmailAuth = () => {
+                if (!emailInput || !passInput) { alert("يرجى إدخال البريد الإلكتروني وكلمة المرور"); return; }
+                if (isSignUpMode) {
+                    auth.createUserWithEmailAndPassword(emailInput, passInput)
+                    .catch((error) => {
+                        if (error.code === 'auth/email-already-in-use') alert('هذا البريد الإلكتروني مستخدم مسبقاً.');
+                        else if (error.code === 'auth/weak-password') alert('كلمة المرور ضعيفة جداً. (يجب أن تكون 6 أحرف على الأقل)');
+                        else if (error.code === 'auth/operation-not-allowed') alert('ميزة البريد الإلكتروني غير مفعلة من إعدادات Firebase.');
+                        else alert('خطأ: ' + error.message);
+                    });
+                } else {
+                    auth.signInWithEmailAndPassword(emailInput, passInput)
+                    .catch((error) => {
+                        if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') alert('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+                        else alert('خطأ: ' + error.message);
+                    });
+                }
+            };
+
+            const handleGuestLogin = () => {
+                auth.signInAnonymously().catch((error) => {
+                    if (error.code === 'auth/operation-not-allowed') alert("⚠️ الميزة مغلقة حالياً!\nلتفعيلها: اذهب لإعدادات حسابك في Firebase ثم فعل خيار Anonymous.");
+                    else alert("حدث خطأ أثناء الدخول كضيف: " + error.message);
+                });
+            };
+
             const toggle = (id, dateKey = todayKey) => setHabits(prev => ({...prev, [dateKey + id]: !prev[dateKey + id]}));
             const toggleSunnah = (id, dateKey = todayKey) => setSunnahHabits(prev => ({...prev, [dateKey + id]: !prev[dateKey + id]}));
             
+            const deleteDailyRecord = (dateKey) => {
+                if(window.confirm('هل أنت متأكد من حذف إنجاز هذا اليوم بالكامل؟')) {
+                    const newHistory = history.filter(h => h.date !== dateKey);
+                    const newHabits = {...habits};
+                    const newSunnah = {...sunnahHabits};
+                    
+                    Object.keys(newHabits).forEach(k => { if(k.startsWith(dateKey)) delete newHabits[k]; });
+                    Object.keys(newSunnah).forEach(k => { if(k.startsWith(dateKey)) delete newSunnah[k]; });
+                    
+                    setHistory(newHistory); setHabits(newHabits); setSunnahHabits(newSunnah);
+                    setEditingDate(null);
+                }
+            };
+
+            const resetAllRecords = () => {
+                if(window.confirm('تنبيه هام! ⚠️\nهل أنت متأكد من مسح جميع السجلات والإنجازات السابقة؟ لا يمكن التراجع عن هذه الخطوة.')) {
+                    setHistory([]); setHabits({}); setSunnahHabits({});
+                }
+            };
+
             const adjustTime = useCallback((timeStr, offset) => {
                 if (!timeStr) return '...';
                 const base = timeStr.split(' ')[0];
@@ -400,6 +724,36 @@
                 return days;
             }, [calMonth, history]);
 
+            const groupedHistoryArray = useMemo(() => {
+                const groups = {};
+                const sortedHistory = [...history].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                sortedHistory.forEach(h => {
+                    const dateObj = new Date(h.date);
+                    const year = dateObj.getFullYear();
+                    const monthStr = dateObj.toLocaleDateString('ar-EG', { month: 'long' });
+                    const monthNum = dateObj.getMonth();
+                    const groupKey = `${year}-${monthNum}`;
+
+                    if (!groups[groupKey]) {
+                        groups[groupKey] = {
+                            year,
+                            monthStr,
+                            monthNum,
+                            records: [],
+                            totalScore: 0
+                        };
+                    }
+                    groups[groupKey].records.push(h);
+                    groups[groupKey].totalScore += h.score;
+                });
+
+                return Object.values(groups).sort((a, b) => {
+                    if (a.year !== b.year) return b.year - a.year;
+                    return b.monthNum - a.monthNum;
+                });
+            }, [history]);
+
             const score = calculateScore(todayKey);
             const sunnahScore = calculateSunnahScore(todayKey);
 
@@ -410,39 +764,243 @@
             );
 
             if (!user) return (
-                <div className="w-full max-w-md mx-auto h-screen flex flex-col items-center justify-center p-10 text-center islamic-pattern" style={{background:'var(--navy)'}}>
-                    <div className="text-7xl mb-6 glow-text">🕌</div><h1 className="text-3xl font-black text-white mb-1">زاد المُسلم</h1>
-                    <p className="font-bold text-sm mb-2" style={{color:'var(--gold)'}}>تتبع طاعاتك · ابنِ عاداتك</p>
-                    <button onClick={() => auth.signInWithPopup(googleProvider)} className="w-full bg-white p-5 rounded-3xl font-black flex items-center justify-center gap-4 shadow-xl active:scale-95 transition text-slate-700 mt-8" style={{border:'2px solid rgba(201,168,76,0.3)'}}>
-                        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6"/> الدخول بحساب Google
+                <div className="w-full max-w-md mx-auto h-screen flex flex-col items-center justify-center p-6 text-center islamic-pattern overflow-y-auto custom-scroll" style={{background:'var(--navy)'}}>
+                    <div className="text-6xl mb-4 glow-text mt-8">🕌</div><h1 className="text-2xl font-black text-white mb-1">زاد المُسلم</h1>
+                    <p className="font-bold text-xs mb-6" style={{color:'var(--gold)'}}>تتبع طاعاتك · ابنِ عاداتك</p>
+                    
+                    <div className="w-full bg-white/10 p-4 rounded-[2rem] border border-white/20 mb-4 backdrop-blur-md shadow-xl">
+                        <div className="flex gap-2 mb-4 bg-[#0F1F3D]/50 p-1.5 rounded-2xl">
+                            <button onClick={()=>setIsSignUpMode(false)} className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all ${!isSignUpMode ? 'bg-white shadow-sm' : 'text-white/60'}`} style={!isSignUpMode ? {color:'var(--navy)'} : {}}>تسجيل الدخول</button>
+                            <button onClick={()=>setIsSignUpMode(true)} className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all ${isSignUpMode ? 'bg-white shadow-sm' : 'text-white/60'}`} style={isSignUpMode ? {color:'var(--navy)'} : {}}>حساب جديد</button>
+                        </div>
+                        <input type="email" value={emailInput} onChange={e=>setEmailInput(e.target.value)} placeholder="البريد الإلكتروني" className="w-full mb-3 p-4 rounded-2xl text-sm font-bold outline-none border-2 transition-colors focus:border-[#C9A84C]" style={{background:'white', color:'var(--navy)', borderColor:'transparent'}} dir="ltr" />
+                        <input type="password" value={passInput} onChange={e=>setPassInput(e.target.value)} placeholder="كلمة المرور" className="w-full mb-4 p-4 rounded-2xl text-sm font-bold outline-none border-2 transition-colors focus:border-[#C9A84C]" style={{background:'white', color:'var(--navy)', borderColor:'transparent'}} dir="ltr" />
+                        <button onClick={handleEmailAuth} className="w-full p-4 rounded-2xl font-black text-white active:scale-95 transition shadow-lg text-sm" style={{background:'linear-gradient(135deg, var(--gold-dark), var(--gold))'}}>
+                            {isSignUpMode ? 'إنشاء حساب جديد' : 'دخول إلى حسابي'}
+                        </button>
+                    </div>
+
+                    <div className="w-full flex items-center justify-center gap-3 my-2 opacity-50">
+                        <div className="h-px flex-1 bg-white"></div><span className="text-white text-[10px]">أو طرق أخرى</span><div className="h-px flex-1 bg-white"></div>
+                    </div>
+                    
+                    <button onClick={() => auth.signInWithPopup(googleProvider)} className="w-full bg-white p-3.5 rounded-2xl font-black flex items-center justify-center gap-3 shadow-lg active:scale-95 transition text-slate-700 mt-2 text-sm" style={{border:'2px solid rgba(201,168,76,0.3)'}}>
+                        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-4 h-4"/> الدخول بحساب Google
                     </button>
+                    <button onClick={handleGuestLogin} className="w-full bg-transparent p-3.5 rounded-2xl font-black flex items-center justify-center gap-2 active:scale-95 transition text-white/90 border mt-3 text-sm" style={{borderColor:'rgba(255,255,255,0.15)'}}>
+                        <i className="fa-solid fa-user-secret"></i> الدخول كضيف (مؤقت)
+                    </button>
+                    <p className="text-[8px] mt-4 mb-8 text-white/50 leading-relaxed">الدخول كضيف يحفظ بياناتك في هذا الجهاز فقط. يفضل استخدام بريد إلكتروني لحفظ بياناتك.</p>
                 </div>
             );
 
             return (
                 <div className="w-full max-w-md mx-auto h-screen flex flex-col relative overflow-hidden" style={{background:'var(--cream)'}}>
-                    <header className="shrink-0 pt-10 pb-20 px-6 relative overflow-hidden" style={{background: `linear-gradient(160deg, var(--navy) 0%, var(--navy-light) 100%)`, borderBottomLeftRadius: '3rem', borderBottomRightRadius: '3rem'}}>
-                        <div className="absolute inset-0 opacity-10 islamic-pattern"></div>
-                        <div className="relative z-10 flex justify-between items-start">
-                            <div>
-                                <h1 className="text-2xl font-black text-white mb-1">زاد المُسلم</h1>
-                                <p className="text-xs font-bold mb-0.5" style={{color:'var(--gold)'}}>{hijriDate}</p>
-                                <p className="text-[10px] font-bold" style={{color:'rgba(255,255,255,0.4)'}}>{gregorianDate}</p>
+                    
+                    {!readingPage && (
+                        <header className="shrink-0 pt-10 pb-16 px-6 relative overflow-hidden" style={{background: `linear-gradient(160deg, var(--navy) 0%, var(--navy-light) 100%)`, borderBottomLeftRadius: '3rem', borderBottomRightRadius: '3rem'}}>
+                            <div className="absolute inset-0 opacity-10 islamic-pattern"></div>
+                            <div className="relative z-10 flex justify-between items-start">
+                                <div>
+                                    <h1 className="text-2xl font-black text-white mb-1">زاد المُسلم</h1>
+                                    <p className="text-xs font-bold mb-0.5" style={{color:'var(--gold)'}}>{hijriDate}</p>
+                                    <p className="text-[10px] font-bold" style={{color:'rgba(255,255,255,0.4)'}}>{gregorianDate}</p>
+                                </div>
+                                <div className="flex flex-col items-end gap-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="bg-white/10 px-3 py-1.5 rounded-xl border flex items-center gap-1.5" style={{borderColor:'rgba(255,255,255,0.1)'}}>
+                                            <span className="text-[10px] font-black" style={{color: getUserRank.color}}>{getUserRank.title}</span>
+                                            <span className="text-sm">{getUserRank.icon}</span>
+                                        </div>
+                                        <div className="cursor-pointer" onClick={() => setActiveTab('settings')}>
+                                            <img src={user.photoURL || 'https://cdn-icons-png.flaticon.com/512/149/149071.png'} className={`w-10 h-10 rounded-xl border-2 shadow-md ${user.isAnonymous || !user.photoURL ? 'bg-white p-1' : ''}`} style={{borderColor:'var(--gold)'}} onError={e => {e.target.style.display='none'}}/>
+                                        </div>
+                                    </div>
+                                    {streak > 0 && (
+                                        <div className="flex items-center gap-1 px-3 py-1 rounded-lg streak-fire" style={{background:'rgba(201,168,76,0.15)'}}>
+                                            <i className="fa-solid fa-fire text-[10px]" style={{color:'var(--gold)'}}></i>
+                                            <span className="text-[11px] font-black" style={{color:'var(--gold)'}}>{streak} أيام التزام</span>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                                {streak > 0 && (
-                                    <div className="flex flex-col items-center bg-white/10 rounded-2xl px-3 py-1.5 streak-fire">
-                                        <span className="text-sm font-black" style={{color:'var(--gold)'}}>🔥 {streak}</span>
+                        </header>
+                    )}
+
+                    <main className={`flex-1 px-4 ${readingPage ? 'pt-4' : '-mt-6'} relative z-20 overflow-y-auto custom-scroll ${!readingPage ? 'pb-32' : 'pb-0'}`} style={readingPage ? {background:'var(--paper)'} : {}}>
+
+                        {/* --- قسم قراءة المصحف (مع تفعيل السحب باللمس وإلغاء الأزرار السفلية) --- */}
+                        {readingPage && (
+                            <div 
+                                className="tab-animate h-full relative flex flex-col"
+                                onTouchStart={handleTouchStart}
+                                onTouchEnd={handleTouchEnd}
+                            >
+                                <div className="sticky top-0 bg-[#FDFBF7]/95 backdrop-blur-md z-30 pb-4 pt-2 mb-4 border-b flex items-center justify-between px-1" style={{borderColor:'rgba(201,168,76,0.2)'}}>
+                                    <button onClick={() => {setReadingPage(null); setPageData(null);}} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm border active:scale-95 transition text-slate-600" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                        <i className="fa-solid fa-arrow-right"></i>
+                                    </button>
+                                    <div className="text-center">
+                                        <h2 className="font-black text-base quran-text" style={{color:'var(--navy)'}}>الصفحة {readingPage}</h2>
+                                    </div>
+                                    <div className="flex gap-2 items-center">
+                                        <button onClick={saveBookmark} title="حفظ هذه الصفحة للعودة إليها لاحقاً" className={`w-9 h-9 rounded-xl flex items-center justify-center shadow-sm border active:scale-95 transition ${quranBookmark === readingPage ? 'bg-[#C9A84C] text-white border-[#C9A84C]' : 'bg-white text-[#C9A84C]'}`} style={{borderColor:'rgba(201,168,76,0.3)'}}>
+                                            <i className={`fa-solid fa-bookmark text-sm`}></i>
+                                        </button>
+                                        <div className="flex gap-1 ml-1 border-r pr-2" style={{borderColor:'rgba(0,0,0,0.1)'}}>
+                                            <button onClick={()=>setQuranFontSize(f => Math.min(f + 2, 40))} className="w-8 h-9 rounded-xl flex items-center justify-center bg-white shadow-sm border active:scale-95 transition text-slate-600" style={{borderColor:'rgba(0,0,0,0.05)'}}><i className="fa-solid fa-plus text-[10px]"></i></button>
+                                            <button onClick={()=>setQuranFontSize(f => Math.max(f - 2, 16))} className="w-8 h-9 rounded-xl flex items-center justify-center bg-white shadow-sm border active:scale-95 transition text-slate-600" style={{borderColor:'rgba(0,0,0,0.05)'}}><i className="fa-solid fa-minus text-[10px]"></i></button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {quranLoading || !pageData ? (
+                                    <div className="flex flex-col items-center justify-center h-64 opacity-50 mt-20">
+                                        <i className="fa-solid fa-book-open-reader text-4xl mb-4 pulse-gold text-[#C9A84C]"></i>
+                                        <p className="font-bold text-sm">جاري جلب الآيات...</p>
+                                    </div>
+                                ) : (
+                                    <div className="flex-1">
+                                        <div className="text-justify px-2 pb-6" dir="rtl" style={{lineHeight: 2.3}}>
+                                            {pageData.ayahs.map((ayah) => {
+                                                let text = ayah.text;
+                                                let isFirstAyah = ayah.numberInSurah === 1;
+                                                let surahName = ayah.surah.name;
+
+                                                if (ayah.surah.number !== 1 && ayah.surah.number !== 9 && isFirstAyah && text.startsWith('بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ ')) {
+                                                    text = text.replace('بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ ', '');
+                                                }
+
+                                                return (
+                                                    <React.Fragment key={ayah.number}>
+                                                        {isFirstAyah && (
+                                                            <div className="block w-full flex flex-col items-center mt-8 mb-4">
+                                                                <div className="bg-white/60 px-8 py-2 rounded-[2rem] border shadow-sm w-4/5 flex justify-center" style={{borderColor:'rgba(201,168,76,0.4)'}}>
+                                                                    <h2 className="text-xl font-black quran-text" style={{color:'var(--navy)'}}>{surahName}</h2>
+                                                                </div>
+                                                                {ayah.surah.number !== 1 && ayah.surah.number !== 9 && (
+                                                                    <div className="mt-4 mb-2 text-center w-full block">
+                                                                        <span className="quran-text" style={{fontSize: quranFontSize + 'px', color:'var(--navy)'}}>بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        
+                                                        <span className="quran-text inline" style={{fontSize: quranFontSize + 'px', color:'var(--navy)'}}>
+                                                            {text} 
+                                                            <span className="inline-block mx-1 font-sans font-bold text-[#8B6914] relative text-center flex-inline items-center justify-center" style={{fontSize: (quranFontSize * 0.45) + 'px', width: '2.2em'}}>
+                                                                <span className="absolute inset-0 flex items-center justify-center mt-[1px]">۝</span>
+                                                                <span className="relative z-10" style={{fontSize:'0.6em'}}>{ayah.numberInSurah}</span>
+                                                            </span>
+                                                        </span>
+                                                    </React.Fragment>
+                                                );
+                                            })}
+                                        </div>
+                                        
+                                        <div className="text-center pb-12 pt-6 opacity-30 flex justify-center items-center gap-4 select-none">
+                                            <i className="fa-solid fa-angles-right text-xs"></i>
+                                            <span className="text-[10px] font-bold tracking-widest">اسحب الشاشة للتنقل بين الصفحات</span>
+                                            <i className="fa-solid fa-angles-left text-xs"></i>
+                                        </div>
                                     </div>
                                 )}
-                                <div className="cursor-pointer" onClick={() => setActiveTab('settings')}><img src={user.photoURL} className="w-10 h-10 rounded-2xl border-2 shadow-md" style={{borderColor:'var(--gold)'}} onError={e => {e.target.style.display='none'}}/></div>
                             </div>
-                        </div>
-                    </header>
+                        )}
 
-                    <main className="flex-1 px-4 -mt-12 relative z-20 overflow-y-auto pb-32 custom-scroll">
+                        {!readingPage && activeTab === 'quran' && <div className="tab-animate">
+                            
+                            <button onClick={() => openPage(quranBookmark)} className="w-full bg-white p-4 rounded-[2rem] mb-4 border-2 flex items-center justify-between active:scale-95 transition shadow-sm" style={{borderColor:'var(--gold)'}}>
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 rounded-full flex items-center justify-center text-lg" style={{background:'rgba(201,168,76,0.15)', color:'var(--gold-dark)'}}>
+                                        <i className="fa-solid fa-bookmark"></i>
+                                    </div>
+                                    <div className="text-right">
+                                        <p className="font-black text-base" style={{color:'var(--navy)'}}>إكمال القراءة</p>
+                                        <p className="text-[10px] font-bold text-slate-500 mt-1">العودة إلى الصفحة {quranBookmark} من حيث توقفت</p>
+                                    </div>
+                                </div>
+                                <i className="fa-solid fa-arrow-left text-sm opacity-30" style={{color:'var(--navy)'}}></i>
+                            </button>
 
-                        {activeTab === 'today' && <div className="tab-animate">
+                            {/* الميزة الجديدة: تنزيل المصحف بالكامل */}
+                            <div className="bg-white p-4 rounded-[2rem] border mb-6 shadow-sm flex items-center justify-between overflow-hidden relative" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                {isDownloadingQuran && (
+                                    <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-10 flex flex-col justify-center px-6">
+                                        <p className="text-[10px] font-black text-teal-600 mb-2">جاري التنزيل... {downloadProgress}%</p>
+                                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                            <div className="bg-teal-500 h-full transition-all duration-300" style={{width: `${downloadProgress}%`}}></div>
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                <div>
+                                    <h4 className="font-black text-xs mb-1" style={{color:'var(--navy)'}}>القراءة بدون إنترنت</h4>
+                                    <p className="text-[9px] font-bold text-slate-400 max-w-[200px] leading-relaxed">
+                                        {isQuranDownloaded ? 'المصحف محمل بالكامل في جهازك' : 'قم بتنزيل المصحف ليعمل بسرعة فائقة وبدون أي اتصال بالإنترنت.'}
+                                    </p>
+                                </div>
+                                
+                                {isQuranDownloaded ? (
+                                    <div className="flex gap-2">
+                                        <button onClick={handleDeleteDownloadedQuran} className="w-10 h-10 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center text-xs active:scale-95 transition border" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                            <i className="fa-solid fa-trash"></i>
+                                        </button>
+                                        <div className="w-10 h-10 rounded-xl bg-emerald-50 text-teal-600 flex items-center justify-center text-sm border" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                            <i className="fa-solid fa-check"></i>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <button onClick={handleDownloadQuran} className="px-4 py-3 rounded-xl font-black text-white text-[10px] active:scale-95 transition flex items-center gap-2 shadow-md" style={{background:'linear-gradient(135deg, var(--teal-light), var(--teal))'}}>
+                                        <i className="fa-solid fa-cloud-arrow-down text-sm"></i> تنزيل (2 MB)
+                                    </button>
+                                )}
+                            </div>
+
+                            <div className="bg-white p-4 rounded-[2rem] border mb-6 shadow-sm" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                <div className="mb-4">
+                                    <label className="text-[10px] font-black text-slate-400 mb-2 block uppercase tracking-widest"><i className="fa-solid fa-magnifying-glass"></i> ابحث عن سورة</label>
+                                    <input value={quranSearchQuery} onChange={e=>setQuranSearchQuery(e.target.value)} placeholder="اسم السورة..." className="w-full bg-slate-50 border p-3 rounded-2xl text-sm font-bold outline-none focus:border-[#C9A84C] transition" style={{color:'var(--navy)', borderColor:'rgba(0,0,0,0.05)'}} />
+                                </div>
+                                <div className="border-t pt-4" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                    <label className="text-[10px] font-black text-slate-400 mb-2 block uppercase tracking-widest"><i className="fa-solid fa-file-lines"></i> الانتقال السريع لصفحة</label>
+                                    <div className="flex gap-2">
+                                        <input type="number" min="1" max="604" value={jumpPageInput} onChange={e=>setJumpPageInput(e.target.value)} placeholder="رقم من 1 إلى 604" className="flex-1 bg-slate-50 border p-3 rounded-2xl text-sm font-bold outline-none focus:border-[#C9A84C] transition text-center" style={{color:'var(--navy)', borderColor:'rgba(0,0,0,0.05)'}} dir="ltr" />
+                                        <button onClick={handleJumpPage} className="px-6 rounded-2xl font-black text-white active:scale-95 transition" style={{background:'linear-gradient(135deg, var(--teal-light), var(--teal))'}}>انتقال</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <h3 className="text-[10px] font-black uppercase tracking-widest mb-3 px-1" style={{color:'var(--teal)'}}>فهرس سور القرآن الكريم</h3>
+                            
+                            {surahsList.length === 0 ? (
+                                <div className="text-center py-10 opacity-50"><i className="fa-solid fa-spinner fa-spin text-2xl mb-2 text-[#C9A84C]"></i><p className="text-xs font-bold">جاري تحميل الفهرس...</p></div>
+                            ) : (
+                                <div className="space-y-2 pb-6">
+                                    {filteredSurahs.length === 0 ? (
+                                        <div className="text-center text-sm font-bold text-slate-400 py-6">لا توجد سورة بهذا الاسم</div>
+                                    ) : (
+                                        filteredSurahs.map(surah => (
+                                            <div key={surah.number} onClick={() => openPage(SURAH_START_PAGES[surah.number - 1])} className="bg-white p-4 rounded-2xl flex items-center justify-between border cursor-pointer active:scale-[0.98] transition-transform" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-slate-50 font-black text-[11px] text-slate-400 border relative" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                                        <div className="absolute inset-0 border border-slate-200 m-1 rounded-lg transform rotate-45 opacity-50"></div>
+                                                        <span className="relative z-10">{surah.number}</span>
+                                                    </div>
+                                                    <div>
+                                                        <h4 className="font-black text-base quran-text" style={{color:'var(--navy)'}}>{surah.name}</h4>
+                                                        <p className="text-[9px] font-bold text-slate-400">{surah.revelationType === 'Meccan' ? 'مكية' : 'مدنية'} • {surah.numberOfAyahs} آيات • تبدأ بصفحة {SURAH_START_PAGES[surah.number - 1]}</p>
+                                                    </div>
+                                                </div>
+                                                <i className="fa-solid fa-chevron-left text-xs opacity-20"></i>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            )}
+                        </div>}
+
+                        {!readingPage && activeTab === 'today' && <div className="tab-animate">
                             <div className="card-glass rounded-[2.5rem] p-5 shadow-lg mb-5 border" style={{borderColor:'rgba(201,168,76,0.2)'}}>
                                 <div className="flex items-center justify-between">
                                     <div className="flex-1">
@@ -453,7 +1011,7 @@
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-3 mb-5">
+                            <div className="grid grid-cols-2 gap-3 mb-4">
                                 {nextPrayerInfo && (
                                     <div className="next-prayer-card rounded-3xl p-4 border flex flex-col justify-center text-white shadow-lg relative overflow-hidden">
                                         <div className="absolute -left-2 -bottom-2 text-5xl opacity-10">{nextPrayerInfo.icon}</div>
@@ -468,6 +1026,16 @@
                                     <p className="text-[8px] font-black" style={{color:'var(--teal)'}}>{todayHadith.s}</p>
                                 </div>
                             </div>
+
+                            {smartReminder && (
+                                <div className="smart-reminder rounded-3xl p-4 mb-5 border shadow-lg relative overflow-hidden text-white flex items-center gap-4">
+                                    <div className="text-3xl opacity-80">{smartReminder.icon}</div>
+                                    <div>
+                                        <h3 className="text-xs font-black mb-1">{smartReminder.title}</h3>
+                                        <p className="text-[10px] font-bold opacity-90 leading-relaxed">{smartReminder.desc}</p>
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="flex items-center justify-between mb-3 px-1">
                                 <span className="text-[11px] font-black" style={{color:'var(--navy)'}}><i className="fa-solid fa-location-dot text-[10px] ml-1" style={{color:'var(--gold-dark)'}}></i> أوقات الصلاة ({CITIES.find(c => c.value === city)?.label})</span>
@@ -498,7 +1066,7 @@
                                 </div>
                             </div>
                             
-                            {[ {k:'q', n:'الورد اليومي', icon:'📖'}, {k:'az', n:'أذكار الصباح والمساء', icon:'🤲'}, {k:'sw', n:'الصلاة على النبي ﷺ', icon:'💚'}, {k:'ist', n:'الاستغفار', icon:'📿'} ].map(h => (
+                            {[ {k:'q', n:'الورد اليومي (متابعة)', icon:'📖'}, {k:'az', n:'أذكار الصباح والمساء', icon:'🤲'}, {k:'sw', n:'الصلاة على النبي ﷺ', icon:'💚'}, {k:'ist', n:'الاستغفار', icon:'📿'} ].map(h => (
                                 <div key={h.k} onClick={() => toggle(h.k, todayKey)} className={`flex items-center justify-between p-4 mb-2.5 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${habits[todayKey+h.k] ? 'habit-done' : 'bg-white'}`} style={!habits[todayKey+h.k] ? {borderColor:'rgba(0,0,0,0.06)'} : {}}>
                                     <div className="flex items-center gap-3"><span className="text-2xl">{h.icon}</span><span className="font-black text-sm" style={{color:'var(--navy)'}}>{h.n}</span></div>
                                     <div className={`w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all ${habits[todayKey+h.k] ? 'border-0' : ''}`} style={habits[todayKey+h.k] ? {background:'var(--gold)', color:'white'} : {borderColor:'#E5E7EB'}}>{habits[todayKey+h.k] ? <i className="fa-solid fa-check text-sm"></i> : ''}</div>
@@ -506,7 +1074,7 @@
                             ))}
                             
                             <div className="card-glass rounded-[2rem] p-5 mt-4 mb-5 border" style={{borderColor:'rgba(201,168,76,0.25)', background:'linear-gradient(135deg, rgba(250,246,238,0.95), rgba(240,232,213,0.8))'}}>
-                                <h3 className="font-black text-xs mb-4 flex items-center gap-2" style={{color:'var(--gold-dark)'}}><i className="fa-solid fa-quran text-base"></i> ورد القرآن الكريم</h3>
+                                <h3 className="font-black text-xs mb-4 flex items-center gap-2" style={{color:'var(--gold-dark)'}}><i className="fa-solid fa-check-double text-base"></i> متابعة الورد اليدوية</h3>
                                 <div className="grid grid-cols-4 gap-2">
                                     {[ ['سورة','s','📖'], ['جزء','j','📂'], ['صفحة','p','📄'], ['آية','a','🔖'] ].map(([l,k,icon])=>(
                                         <div key={k} className="bg-white/80 p-3 rounded-2xl text-center border" style={{borderColor:'rgba(201,168,76,0.2)'}}>
@@ -517,18 +1085,18 @@
                             </div>
                         </div>}
 
-                        {activeTab === 'sunnah' && <div className="tab-animate">
+                        {!readingPage && activeTab === 'sunnah' && <div className="tab-animate">
                             <div className="card-glass rounded-[2.5rem] p-5 shadow-lg mb-5 border" style={{borderColor:'rgba(58,166,143,0.25)'}}>
                                 <div className="flex items-center justify-between mb-3"><div className="flex-1"><p className="text-xs font-black mb-1" style={{color:'var(--navy)'}}>السنن اليوم</p><p className="text-[10px] font-bold mb-2" style={{color:'rgba(0,0,0,0.4)'}}>{SUNNAH_LIST.filter(s => sunnahHabits[todayKey + s.k]).length} من {SUNNAH_LIST.length}</p><div className="h-2 rounded-full overflow-hidden" style={{background:'#E5E7EB'}}><div className="h-full rounded-full transition-all duration-700" style={{width: sunnahScore + '%', background:'linear-gradient(90deg, var(--teal), var(--teal-light))'}}></div></div></div><div className="w-16 h-16 rounded-full flex items-center justify-center font-black text-xl mr-4" style={{background:`conic-gradient(var(--teal-light) ${sunnahScore * 3.6}deg, #E5E7EB ${sunnahScore * 3.6}deg)`, padding:'3px'}}><div className="w-full h-full rounded-full flex items-center justify-center" style={{background:'white'}}><span style={{color:'var(--teal)', fontSize:'14px'}}>{sunnahScore}%</span></div></div></div>
                             </div>
                             {['قبلية', 'بعدية', 'نافلة', 'يومية'].map(type => {
                                 const typeSunnahs = SUNNAH_LIST.filter(s => s.type === type);
                                 if(typeSunnahs.length === 0) return null;
-                                return (<div key={type} className="mb-5"><h3 className="text-[10px] font-black uppercase tracking-widest mb-3 px-1" style={{color:'var(--teal)'}}>{type === 'قبلية' ? '◆ سنن قبلية' : type === 'بعدية' ? '◆ سنن بعدية' : type === 'نافلة' ? '◆ نوافل' : '◆ يومية'}</h3>{typeSunnahs.map(s => (<div key={s.k} onClick={() => toggleSunnah(s.k, todayKey)} className={`flex items-center justify-between p-4 mb-2.5 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${sunnahHabits[todayKey+s.k] ? 'sunnah-done' : 'bg-white'}`} style={!sunnahHabits[todayKey+s.k] ? {borderColor:'rgba(0,0,0,0.06)'} : {}}><div className="flex items-center gap-3"><span className="text-xl">{s.icon}</span><span className="font-bold text-sm" style={{color:'var(--navy)'}}>{s.n}</span></div><div className={`w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all ${sunnahHabits[todayKey+s.k] ? 'border-0' : ''}`} style={sunnahHabits[todayKey+s.k] ? {background:'var(--teal)', color:'white'} : {borderColor:'#E5E7EB'}}>{sunnahHabits[todayKey+s.k] ? <i className="fa-solid fa-check text-sm"></i> : ''}</div></div>))}</div>);
+                                return (<div key={type} className="mb-5"><h3 className="text-[10px] font-black uppercase tracking-widest mb-3 px-1" style={{color:'var(--teal)'}}>{type === 'قبلية' ? '◆ سنن قبلية' : type === 'بعدية' ? '◆ سنن بعدية' : type === 'نافلة' ? '◆ نوافل' : '◆ يومية (بما فيها الصيام)'}</h3>{typeSunnahs.map(s => (<div key={s.k} onClick={() => toggleSunnah(s.k, todayKey)} className={`flex items-center justify-between p-4 mb-2.5 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${sunnahHabits[todayKey+s.k] ? 'sunnah-done' : 'bg-white'}`} style={!sunnahHabits[todayKey+s.k] ? {borderColor:'rgba(0,0,0,0.06)'} : {}}><div className="flex items-center gap-3"><span className="text-xl">{s.icon}</span><span className="font-bold text-sm" style={{color:'var(--navy)'}}>{s.n}</span></div><div className={`w-8 h-8 rounded-xl border-2 flex items-center justify-center transition-all ${sunnahHabits[todayKey+s.k] ? 'border-0' : ''}`} style={sunnahHabits[todayKey+s.k] ? {background:'var(--teal)', color:'white'} : {borderColor:'#E5E7EB'}}>{sunnahHabits[todayKey+s.k] ? <i className="fa-solid fa-check text-sm"></i> : ''}</div></div>))}</div>);
                             })}
                         </div>}
 
-                        {activeTab === 'calendar' && <div className="tab-animate">
+                        {!readingPage && activeTab === 'calendar' && <div className="tab-animate">
                             {upcomingEvents.length > 0 && (
                                 <div className="bg-rose-50 border-2 border-rose-100 rounded-2xl p-4 mb-4 flex items-center gap-3">
                                     <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-500 flex items-center justify-center text-lg"><i className="fa-solid fa-bell"></i></div>
@@ -569,33 +1137,60 @@
                                 </div>
                             </div>
 
-                            <div className="flex items-center justify-between mb-3 px-1 mt-6">
-                                <h2 className="text-[10px] font-black uppercase tracking-widest" style={{color:'rgba(0,0,0,0.3)'}}>سجل الإنجازات (اضغط للتعديل)</h2>
+                            <div className="flex items-center justify-between mb-4 px-1 mt-6">
+                                <h2 className="text-[10px] font-black uppercase tracking-widest" style={{color:'rgba(0,0,0,0.3)'}}>سجل الإنجازات المفصل (اضغط للتعديل)</h2>
                             </div>
                             
-                            {history.length === 0 ? <div className="text-center py-8 font-bold text-xs" style={{color:'rgba(0,0,0,0.25)'}}>لا يوجد سجل محفوظ</div> : history.slice(0, 10).map((h, i) => (
-                                <div key={i} onClick={() => setEditingDate(h.date)} className="bg-white p-4 rounded-2xl mb-2 flex justify-between items-center border cursor-pointer active:scale-[0.98] transition-transform" style={{borderColor:'rgba(0,0,0,0.06)'}}>
-                                    <div className="font-bold text-sm flex items-center gap-2" style={{color:'var(--navy)'}}>
-                                        <i className="fa-solid fa-pen text-[10px] text-slate-300"></i>
-                                        {new Date(h.date).toLocaleDateString('ar-EG', {weekday:'long', day:'numeric', month:'short'})}
-                                    </div>
-                                    <div className="text-xs font-black px-3 py-1 rounded-xl" style={h.score >= 70 ? {background:'rgba(42,127,111,0.12)', color:'var(--teal)'} : {background:'rgba(201,168,76,0.12)', color:'var(--gold-dark)'}}>{h.score}%</div>
-                                </div>
-                            ))}
+                            {groupedHistoryArray.length === 0 ? (
+                                <div className="text-center py-8 font-bold text-xs" style={{color:'rgba(0,0,0,0.25)'}}>لا يوجد سجل محفوظ</div>
+                            ) : (
+                                groupedHistoryArray.map((group, groupIdx) => {
+                                    const monthlyAverage = Math.round(group.totalScore / group.records.length);
+                                    return (
+                                        <div key={groupIdx} className="mb-6">
+                                            <div className="flex items-center justify-between mb-3 px-1">
+                                                <h3 className="font-black text-sm" style={{color:'var(--navy)'}}>
+                                                    {group.monthStr} {group.year}
+                                                </h3>
+                                                <div className="bg-white px-3 py-1 rounded-xl border flex items-center gap-2 shadow-sm" style={{borderColor:'rgba(201,168,76,0.3)'}}>
+                                                    <span className="text-[9px] font-bold text-slate-500">إنجاز الشهر:</span>
+                                                    <span className="text-xs font-black" style={{color:'var(--gold-dark)'}}>{monthlyAverage}%</span>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {group.records.map((h, i) => (
+                                                    <div key={i} onClick={() => setEditingDate(h.date)} className="bg-white p-4 rounded-2xl flex justify-between items-center border cursor-pointer active:scale-[0.98] transition-transform" style={{borderColor:'rgba(0,0,0,0.06)'}}>
+                                                        <div className="font-bold text-sm flex items-center gap-2" style={{color:'var(--navy)'}}>
+                                                            <i className="fa-solid fa-pen text-[10px] text-slate-300"></i>
+                                                            {new Date(h.date).toLocaleDateString('ar-EG', {weekday:'long', day:'numeric'})}
+                                                        </div>
+                                                        <div className="text-xs font-black px-3 py-1 rounded-xl" style={h.score >= 70 ? {background:'rgba(42,127,111,0.12)', color:'var(--teal)'} : {background:'rgba(201,168,76,0.12)', color:'var(--gold-dark)'}}>{h.score}%</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
                         </div>}
 
-                        {activeTab === 'settings' && <div className="tab-animate">
+                        {!readingPage && activeTab === 'settings' && <div className="tab-animate">
                             <div className="card-glass rounded-[2.5rem] p-6 shadow-lg mb-6 border" style={{borderColor:'rgba(201,168,76,0.2)'}}>
                                 <div className="flex flex-col items-center mb-6 border-b pb-6" style={{borderColor:'rgba(0,0,0,0.06)'}}>
-                                    <img src={user.photoURL} className="w-20 h-20 rounded-full border-4 mb-3 shadow-md" style={{borderColor:'var(--gold)'}} onError={e => {e.target.style.display='none'}}/>
-                                    <h2 className="font-black text-lg" style={{color:'var(--navy)'}}>{user.displayName || 'المستخدم'}</h2>
-                                    <p className="text-[10px] font-bold mt-1" style={{color:'rgba(0,0,0,0.4)'}}>{user.email}</p>
+                                    <img src={user.photoURL || 'https://cdn-icons-png.flaticon.com/512/149/149071.png'} className={`w-20 h-20 rounded-full border-4 mb-3 shadow-md ${user.isAnonymous || !user.photoURL ? 'bg-white p-2' : ''}`} style={{borderColor:'var(--gold)'}} onError={e => {e.target.style.display='none'}}/>
+                                    <h2 className="font-black text-lg" style={{color:'var(--navy)'}}>{user.isAnonymous ? 'مستخدم ضيف' : (user.displayName || 'المستخدم')}</h2>
+                                    <p className="text-[10px] font-bold mt-1 mb-3" style={{color:'rgba(0,0,0,0.4)'}}>{user.isAnonymous ? 'تُحفظ بياناتك محلياً بشكل مؤقت' : user.email}</p>
+                                    
+                                    <div className="bg-slate-50 px-4 py-2 rounded-xl border flex items-center gap-2" style={{borderColor:'rgba(0,0,0,0.05)'}}>
+                                        <span className="text-[10px] font-bold text-slate-500">مستواك الحالي:</span>
+                                        <span className="text-sm font-black" style={{color: getUserRank.color}}>{getUserRank.title} {getUserRank.icon}</span>
+                                    </div>
                                 </div>
 
                                 <div className="mb-6">
                                     <h3 className="text-[10px] font-black uppercase tracking-widest mb-3 px-1" style={{color:'var(--teal)'}}><i className="fa-solid fa-location-dot"></i> الموقع وحساب المواقيت</h3>
                                     <div className="bg-white p-3 rounded-2xl border mb-3" style={{borderColor:'rgba(0,0,0,0.06)'}}>
-                                        <label className="block text-[10px] font-bold mb-1" style={{color:'rgba(0,0,0,0.4)'}}>المدينة</label>
+                                        <label className="block text-[10px] font-bold mb-1" style={{color:'rgba(0,0,0,0.4)'}}>المحافظة / المدينة</label>
                                         <select value={city} onChange={e => setCity(e.target.value)} className="w-full font-black text-sm border-0 outline-none" style={{color:'var(--navy)'}}>
                                             {CITIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                                         </select>
@@ -624,16 +1219,23 @@
                                         ))}
                                     </div>
                                 </div>
+                                
+                                <div className="mb-6 border-t pt-6" style={{borderColor:'rgba(0,0,0,0.06)'}}>
+                                    <h3 className="text-[10px] font-black uppercase tracking-widest mb-3 px-1 text-rose-500"><i className="fa-solid fa-triangle-exclamation"></i> منطقة الخطر</h3>
+                                    <button onClick={resetAllRecords} className="w-full bg-rose-50 text-rose-600 p-4 rounded-2xl font-black flex items-center justify-center gap-3 active:scale-95 transition border border-rose-100">
+                                        <i className="fa-solid fa-trash-can"></i> تصفير جميع السجلات
+                                    </button>
+                                </div>
 
                                 <div>
-                                    <button onClick={() => auth.signOut()} className="w-full bg-rose-50 text-rose-600 p-4 rounded-2xl font-black flex items-center justify-center gap-3 active:scale-95 transition">
+                                    <button onClick={() => auth.signOut()} className="w-full bg-slate-100 text-slate-600 p-4 rounded-2xl font-black flex items-center justify-center gap-3 active:scale-95 transition">
                                         <i className="fa-solid fa-arrow-right-from-bracket"></i> تسجيل الخروج
                                     </button>
                                 </div>
                             </div>
                         </div>}
 
-                        {activeTab === 'vocab' && <div className="tab-animate">
+                        {!readingPage && activeTab === 'vocab' && <div className="tab-animate">
                             <div className="card-glass rounded-[2.5rem] p-5 shadow-lg border mb-6" style={{borderColor:'rgba(201,168,76,0.2)', background:'linear-gradient(135deg, rgba(250,246,238,0.98), rgba(240,232,213,0.9))'}}>
                                 <h2 className="font-black text-sm mb-4 flex items-center gap-2" style={{color:'var(--gold-dark)'}}><i className="fa-solid fa-book-open text-base"></i> مفردة قرآنية جديدة</h2>
                                 <input value={newWord.w} onChange={e => setNewWord({...newWord, w:e.target.value})} className="w-full p-4 rounded-2xl mb-3 text-sm font-bold border bg-white/80" style={{color:'var(--navy)', borderColor:'rgba(201,168,76,0.2)'}} placeholder="الكلمة أو العبارة..." />
@@ -672,7 +1274,7 @@
                                     </div>
                                 ))}
                                 
-                                <h4 className="text-[10px] font-black mt-6 mb-3 px-1 uppercase tracking-widest" style={{color:'var(--teal)'}}>السنن</h4>
+                                <h4 className="text-[10px] font-black mt-6 mb-3 px-1 uppercase tracking-widest" style={{color:'var(--teal)'}}>السنن والصيام</h4>
                                 {SUNNAH_LIST.map(s => (
                                     <div key={s.k} onClick={() => toggleSunnah(s.k, editingDate)} className={`flex items-center justify-between p-3.5 mb-2 rounded-2xl border-2 transition-all cursor-pointer active:scale-[0.98] ${sunnahHabits[editingDate+s.k] ? 'sunnah-done' : 'bg-white'}`} style={!sunnahHabits[editingDate+s.k] ? {borderColor:'rgba(0,0,0,0.06)'} : {}}>
                                         <div className="flex items-center gap-3"><span className="text-xl">{s.icon}</span><span className="font-bold text-sm" style={{color:'var(--navy)'}}>{s.n}</span></div>
@@ -680,20 +1282,28 @@
                                     </div>
                                 ))}
                                 
-                                <div className="pb-8 pt-4">
-                                    <button onClick={() => setEditingDate(null)} className="w-full p-4 rounded-2xl font-black text-white shadow-lg active:scale-95 transition text-sm" style={{background:'linear-gradient(135deg, var(--teal-light), var(--teal))'}}>إغلاق وحفظ التعديلات</button>
+                                <div className="flex gap-2 pb-8 pt-4">
+                                    <button onClick={() => deleteDailyRecord(editingDate)} title="حذف سجل هذا اليوم" className="w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center text-rose-500 bg-rose-50 border border-rose-100 active:scale-95 transition">
+                                        <i className="fa-solid fa-trash"></i>
+                                    </button>
+                                    <button onClick={() => setEditingDate(null)} className="flex-1 p-4 rounded-2xl font-black text-white shadow-lg active:scale-95 transition text-sm" style={{background:'linear-gradient(135deg, var(--teal-light), var(--teal))'}}>إغلاق وحفظ التعديلات</button>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    <nav className="fixed bottom-0 w-full max-w-md bg-white/95 backdrop-blur-xl border-t flex items-center justify-around px-2 z-50 shadow-2xl" style={{height:'80px', borderRadius:'2rem 2rem 0 0', borderColor:'rgba(0,0,0,0.06)'}}>
-                        <button onClick={() => setActiveTab('calendar')} className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'calendar' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-calendar-days text-xl"></i><span className="text-[7px] font-black uppercase">التقويم</span></button>
-                        <button onClick={() => setActiveTab('sunnah')} className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'sunnah' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-star-and-crescent text-xl"></i><span className="text-[7px] font-black uppercase">السنن</span></button>
-                        <button onClick={() => setActiveTab('today')} className="relative -top-8 active:scale-90 transition-transform"><div className={`w-16 h-16 rounded-full flex items-center justify-center shadow-2xl border-4 border-white transition-all pulse-gold`} style={{background: activeTab === 'today' ? 'linear-gradient(135deg, var(--navy), var(--navy-light))' : '#E5E7EB'}}><span className="text-2xl">🕌</span></div></button>
-                        <button onClick={() => setActiveTab('vocab')} className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'vocab' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-book text-xl"></i><span className="text-[7px] font-black uppercase">المفردات</span></button>
-                        <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'settings' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-gear text-xl"></i><span className="text-[7px] font-black uppercase">إعدادات</span></button>
-                    </nav>
+                    {/* شريط التنقل السفلي (يختفي عندما تقرأ صفحة لتوفير مساحة أكبر) */}
+                    {!readingPage && (
+                        <nav className="fixed bottom-0 w-full max-w-md bg-white/95 backdrop-blur-xl border-t flex items-center justify-between px-3 z-50 shadow-2xl" style={{height:'80px', borderRadius:'2rem 2rem 0 0', borderColor:'rgba(0,0,0,0.06)'}}>
+                            <button onClick={() => setActiveTab('calendar')} className={`flex flex-col items-center gap-1.5 transition-all w-12 ${activeTab === 'calendar' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-calendar-days text-xl"></i><span className="text-[7px] font-black uppercase">التقويم</span></button>
+                            <button onClick={() => setActiveTab('quran')} className={`flex flex-col items-center gap-1.5 transition-all w-12 ${activeTab === 'quran' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-book-quran text-xl"></i><span className="text-[7px] font-black uppercase">المصحف</span></button>
+                            
+                            <button onClick={() => setActiveTab('today')} className="relative -top-8 active:scale-90 transition-transform mx-2"><div className={`w-16 h-16 rounded-full flex items-center justify-center shadow-2xl border-4 border-white transition-all pulse-gold`} style={{background: activeTab === 'today' ? 'linear-gradient(135deg, var(--navy), var(--navy-light))' : '#E5E7EB'}}><span className="text-2xl">🕌</span></div></button>
+                            
+                            <button onClick={() => setActiveTab('sunnah')} className={`flex flex-col items-center gap-1.5 transition-all w-12 ${activeTab === 'sunnah' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-star-and-crescent text-xl"></i><span className="text-[7px] font-black uppercase">السنن</span></button>
+                            <button onClick={() => setActiveTab('vocab')} className={`flex flex-col items-center gap-1.5 transition-all w-12 ${activeTab === 'vocab' ? 'nav-btn-active' : 'text-slate-300'}`}><i className="fa-solid fa-book text-xl"></i><span className="text-[7px] font-black uppercase">المفردات</span></button>
+                        </nav>
+                    )}
                 </div>
             );
         }
@@ -703,4 +1313,5 @@
     </script>
 </body>
 </html>
+
 
