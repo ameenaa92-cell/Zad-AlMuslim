@@ -476,103 +476,78 @@ function App() {
     if (window.recogTimeout) clearTimeout(window.recogTimeout);
   };
 
-  // دالة تطبيع النص العربي: تزيل التشكيل والمدود وتوحّد الحروف المتشابهة
-  const normalizeArabic = (text) => {
-    if (!text) return '';
-    return text
-      .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') // حذف كل التشكيل
-      .replace(/[أإآٱ]/g, 'ا')    // توحيد الألف
-      .replace(/ة/g, 'ه')          // تاء مربوطة → هاء
-      .replace(/[يىئ]/g, 'ي')     // توحيد الياء
-      .replace(/ؤ/g, 'و')          // واو همزة → واو
-      .replace(/\u0627\u0644\u0644\u0647/g, 'الله') // الله
-      .replace(/\s+/g, ' ')
-      .trim();
+  // ===== نظام التعرف على الآية بالذكاء الاصطناعي =====
+
+  // الخطوة 1: Claude يصحح النص الصوتي ويحدد السورة والآية بدقة عالية
+  const identifyAyahWithAI = async (transcript) => {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 300,
+        system: `أنت خبير في القرآن الكريم وحافظ له. مهمتك تحديد الآية القرآنية من نص صوتي قد يحتوي على أخطاء إملائية أو نطقية بسبب التعرف الآلي على الكلام.
+تعليمات مهمة:
+- النص الصوتي قد يكون بدون تشكيل أو بتشكيل خاطئ
+- قد تختلف همزات الوصل والقطع مثل (أ/إ/ا/آ)
+- قد تُبدَّل بعض الحروف مثل (ة/ه، ي/ى/ئ، ؤ/و)
+- قد يسقط حرف أو كلمة صغيرة
+- ابحث عن أقرب آية قرآنية لهذا النص بناءً على ما حفظته من القرآن الكريم
+- أجب فقط بـ JSON صالح بهذا الشكل بدون أي نص قبله أو بعده:
+{"surah_num": رقم_السورة, "ayah_num": رقم_الآية, "surah_name": "اسم السورة بالعربي"}
+- إذا لم تجد أي آية مناسبة أجب بالضبط: {"not_found": true}`,
+        messages: [{ role: "user", content: `النص الصوتي الملتقط من الميكروفون: "${transcript}"` }]
+      })
+    });
+    if (!response.ok) throw new Error('AI API error: ' + response.status);
+    const data = await response.json();
+    const rawText = data.content?.map(b => b.text || '').join('').trim();
+    // تنظيف الرد من أي markdown محتمل
+    const clean = rawText.replace(/```json|```/g, '').trim();
+    return JSON.parse(clean);
   };
 
-  // بناء قائمة استعلامات متعددة من النص الصوتي
-  const buildSearchQueries = (transcript) => {
-    const norm = normalizeArabic(transcript);
-    const words = norm.split(' ').filter(w => w.length > 2);
-    const queries = [];
-
-    // الاستعلام الكامل أولاً
-    if (norm.length > 3) queries.push(norm);
-
-    // مجموعات من 4 كلمات متتالية
-    for (let i = 0; i <= words.length - 4; i++) {
-      queries.push(words.slice(i, i + 4).join(' '));
-    }
-    // مجموعات من 3 كلمات
-    for (let i = 0; i <= words.length - 3; i++) {
-      queries.push(words.slice(i, i + 3).join(' '));
-    }
-    // أطول كلمة منفردة (≥ 5 أحرف) كخيار أخير
-    const longWords = words.filter(w => w.length >= 5).sort((a,b) => b.length - a.length);
-    longWords.slice(0, 3).forEach(w => queries.push(w));
-
-    // إزالة المكررات مع الحفاظ على الترتيب
-    return [...new Set(queries)];
+  // الخطوة 2: جلب نص الآية الكاملة بالرسم العثماني ورقم صفحتها الدقيق
+  const fetchAyahData = async (surahNum, ayahNum) => {
+    const res = await fetch(`https://api.alquran.cloud/v1/ayah/${surahNum}:${ayahNum}/quran-uthmani`);
+    if (!res.ok) throw new Error('Quran API error');
+    const data = await res.json();
+    if (data.code === 200 && data.data) return data.data;
+    throw new Error('Ayah not found');
   };
 
-  // البحث في API واحد وإعادة أول نتيجة
-  const searchInAPI = async (query) => {
-    try {
-      const encoded = encodeURIComponent(query);
-      const res = await fetch(`https://api.alquran.cloud/v1/search/${encoded}/all/ar`, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (data.code === 200 && data.data?.matches?.length > 0) return data.data.matches[0];
-    } catch (e) { /* تجاهل خطأ timeout */ }
-    return null;
-  };
-
-  // خوارزمية التعرف على الآية – متعددة المحاولات والاستراتيجيات
+  // الدالة الرئيسية: تجمع بين الذكاء الاصطناعي لتحديد الآية وAPI القرآن لجلب نصها وصفحتها
   const identifyTextWithClaude = async (transcript) => {
     try {
-      const queries = buildSearchQueries(transcript);
+      // المرحلة 1: Claude يحدد السورة والآية بذكاء رغم أخطاء التعرف الصوتي
+      const aiResult = await identifyAyahWithAI(transcript);
 
-      for (const query of queries) {
-        if (!query || query.length < 3) continue;
-        const match = await searchInAPI(query);
-        if (match) {
-          // استخدم رقم الصفحة من الـ API مباشرة إن وُجد، وإلا احسبه من SURAH_START_PAGES
-          const pageNum = (match.page && match.page > 0) ? match.page : SURAH_START_PAGES[match.surah.number - 1];
-          setRecogResult({
-            found: true,
-            ayah_text: match.text,
-            surah_num: match.surah.number,
-            surah_name: match.surah.name,
-            ayah_num: match.numberInSurah,
-            page: pageNum
-          });
-          setRecogState('found');
-          return;
-        }
-      }
-
-      // المحاولة الأخيرة: البحث بدون تطبيع (النص الخام كما جاء من الميكروفون)
-      const rawMatch = await searchInAPI(transcript.trim().split(' ').slice(0, 5).join(' '));
-      if (rawMatch) {
-        const pageNum = (rawMatch.page && rawMatch.page > 0) ? rawMatch.page : SURAH_START_PAGES[rawMatch.surah.number - 1];
-        setRecogResult({
-          found: true,
-          ayah_text: rawMatch.text,
-          surah_num: rawMatch.surah.number,
-          surah_name: rawMatch.surah.name,
-          ayah_num: rawMatch.numberInSurah,
-          page: pageNum
-        });
-        setRecogState('found');
+      if (aiResult.not_found) {
+        setRecogState('error');
+        setRecogError('لم أتمكن من التعرف على آية قرآنية في هذا النص. حاول نطق 3 كلمات أو أكثر بوضوح.');
         return;
       }
 
-      setRecogState('error');
-      setRecogError('لم يتم العثور على الآية. حاول نطق عدة كلمات متتالية بشكل واضح.');
+      // المرحلة 2: جلب نص الآية بالرسم العثماني الكامل ورقم الصفحة الدقيق
+      const ayahData = await fetchAyahData(aiResult.surah_num, aiResult.ayah_num);
+      const pageNum = (ayahData.page && ayahData.page > 0)
+        ? ayahData.page
+        : SURAH_START_PAGES[aiResult.surah_num - 1];
+
+      setRecogResult({
+        found: true,
+        ayah_text: ayahData.text,
+        surah_num: aiResult.surah_num,
+        surah_name: aiResult.surah_name,
+        ayah_num: aiResult.ayah_num,
+        page: pageNum
+      });
+      setRecogState('found');
+
     } catch(err) {
-      console.error(err);
+      console.error('Recognition error:', err);
       setRecogState('error');
-      setRecogError('خطأ في الاتصال. تحقق من الإنترنت وحاول مرة أخرى.');
+      setRecogError('خطأ في التحليل. تحقق من الاتصال بالإنترنت وحاول مرة أخرى.');
     }
   };
 
